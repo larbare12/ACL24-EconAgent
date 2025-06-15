@@ -97,28 +97,42 @@ def gpt_actions(env, obs, dialog_queue, dialog4ref_queue, gpt_path, gpt_error, t
             return False
         else:
             return (actions[0] >= 0) & (actions[0] <= 1) & (actions[1] >= 0) & (actions[1] <= 1)
+
+    # 每三个时间步进行一次反思，以减少 API 调用成本并模拟更长期的思考
     if env.world.timestep%3 == 0 and env.world.timestep > 0:
         results, cost = get_multiple_completion([list(dialogs)[:2] + list(dialog4ref)[-3:-1] + list(dialogs)[-1:] for dialogs, dialog4ref in zip(dialog_queue, dialog4ref_queue)])
         total_cost += cost
     else:
         results, cost = get_multiple_completion([list(dialogs) for dialogs in dialog_queue])
         total_cost += cost
+    print(results)
+        # 解析 GPT 的响应
     actions = {}
     for idx in range(env.num_agents):
         content = results[idx]
         try:
+            # 尝试将 JSON 字符串解析为 Python 列表
             extracted_actions = list(eval(content).values())
             if not action_check(extracted_actions):
+                # 如果行动无效，使用默认值并增加错误计数
                 extracted_actions = [1, 0.5]
                 gpt_error += 1
         except:
+            # 如果解析失败，也使用默认值
             extracted_actions = [1, 0.5]
             gpt_error += 1
+
+        # 将工作意愿（概率）转换为二元决策（工作或不工作）
         extracted_actions[0] = int(np.random.uniform() <= extracted_actions[0])
+        # 将消费比例转换为离散的行动索引
         extracted_actions[1] /= 0.02
         actions[str(idx)] = extracted_actions
+
+        # 将 GPT 的响应添加到对话历史中
         dialog_queue[idx].append({'role': 'assistant', 'content': f'{content}'})
         dialog4ref_queue[idx].append({'role': 'assistant', 'content': f'{content}'})
+
+    # 为规划者（planner）设置一个默认行动
     actions['p'] = [0]
     for idx, agent_dialog in enumerate(dialog_queue):
         with open(f'''{gpt_path}/{env.get_agent(str(idx)).endogenous['name']}''', 'a') as f:
@@ -132,7 +146,7 @@ def gpt_actions(env, obs, dialog_queue, dialog4ref_queue, gpt_path, gpt_error, t
         for idx in range(env.num_agents):
             # dialog_queue[idx].append({'role': 'user', 'content': reflection_prompt})
             dialog4ref_queue[idx].append({'role': 'user', 'content': reflection_prompt})
-        results, cost = get_multiple_completion([list(dialogs) for dialogs in dialog4ref_queue], temperature=0, max_tokens=200)
+        results, cost = get_multiple_completion([list(dialogs) for dialogs in dialog4ref_queue], temperature=0, max_tokens=200,reflection=1)
         total_cost += cost
         for idx in range(env.num_agents):
             content = results[idx]
@@ -188,7 +202,7 @@ def complex_actions(env, obs, beta=0.1, gamma=0.1, h=1):
     return actions
     
 
-def main(policy_model='gpt', num_agents=100, episode_length=240, dialog_len=3, beta=0.1, gamma=0.1, h=1, max_price_inflation=0.1, max_wage_inflation=0.05):
+def main(policy_model='gpt', num_agents=3, episode_length=4, dialog_len=3, beta=0.1, gamma=0.1, h=1, max_price_inflation=0.1, max_wage_inflation=0.05):
     env_config['n_agents'] = num_agents
     env_config['episode_length'] = episode_length
     if policy_model == 'gpt':
@@ -257,3 +271,4 @@ def main(policy_model='gpt', num_agents=100, episode_length=240, dialog_len=3, b
 
 if __name__ == "__main__":
     fire.Fire(main)
+
